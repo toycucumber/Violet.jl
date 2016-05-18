@@ -2,20 +2,18 @@ type Engine
   config::Config
   status::Symbol
   empty::Bool
-  root::Node
-  eventlist::EventList
-  port::Int
+  dsp #::AudioSignal
+  events::EventQueue
   frame::Int
 end
 
-function Engine(port=31337, config=CONFIG)
+function Engine(config=CONFIG)
   Engine(
     config,
     :stopped,
     false,
-    Node(config),
-    EventList(config),
-    port,
+    silence,
+    EventQueue(),
     0)
 end
 
@@ -24,27 +22,34 @@ function Base.run(engine::Engine)
     return
   end
   engine.status = :running
-  stream = audiostream(engine.config)
-  buffer = Array{Float32}(engine.config.buffer_size, engine.config.output_channels)
-  δframes = 0
+  config = engine.config
+  stream = convert(IO, connect(config.port))
+  buffer = Array{Float32}(config.buffersize, config.outchannels)
+  Δframes = config.buffersize
+  sr = config.samplerate
+  engine.frame = 0
+  empty!(engine.events)
+  τ₀ = time()
   @async while true
     if engine.status == :running
-      tic()
-      Δframes = min(engine.config.buffer_size, writeavailable(stream) + δframes)
-      engine.eventlist(engine.frame + Δframes)
-      engine.root(engine.frame, Δframes)
-      @inbounds copy!(buffer, engine.root.buffer)
+      endframe = engine.frame + Δframes
+      engine.events(endframe/sr)
+      for ι=1:config.outchannels, frame=1:Δframes
+        τ = (engine.frame + frame)/sr
+        @inbounds buffer[frame, ι] = engine.dsp(τ, ι)
+      end
       if engine.empty
-        empty!(engine.root)
-        empty!(engine.eventlist)
+        engine.dsp = silence
+        empty!(engine.events)
         engine.empty = false
       end
-      write(stream, buffer, Δframes)
-      engine.frame += Δframes
-      sleep(0)
-      δframes = round(Int, toq()*engine.config.sample_rate)
+      δτ = τ₀ + now(engine) - time() - 1e-3
+      δτ > 1e-3 && sleep(δτ)
+      serialize(stream, buffer)
+      flush(stream)
+      engine.frame = endframe
     else
-      kill(stream)
+      close(stream)
       break
     end
   end
@@ -60,14 +65,10 @@ function Base.empty!(engine::Engine)
   end
 end
 
-function fire_audio_event(engine::Engine, event::Event)
-  afunc = fire_event(event)
-  if afunc # FIXME nullable
-    push!(engine.root.audio, afunc)
-  end
-end
+Base.now(engine::Engine) = engine.frame/engine.config.samplerate
 
-wrap_audio_event(engine::Engine, event::Event) = wrap_event(fire_audio_event, [engine], event)
+schedule₀(engine::Engine, start::Time, f::Function, args...) =
+  schedule(engine.events, start, f, args...)
 
-audio_events(engine::Engine, events) = map((event) -> wrap_audio_event(engine, event), events)
-audio_events(engine::Engine, events...) = map((event) -> wrap_audio_event(engine, event), events)
+Base.schedule(engine::Engine, start::Time, f::Function, args...) =
+  schedule₀(engine, now(engine) + start, f, args...)

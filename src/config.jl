@@ -1,12 +1,12 @@
 immutable Config
-  sample_rate::Int
-  buffer_size::Int
-  input_channels::Int
-  output_channels::Int
-  tempo::Float64
+  samplerate::Int
+  buffersize::Int
+  inchannels::Int
+  outchannels::Int
+  port::Int
 end
 
-Config() = Config(44100, 1024, 0, 2, 60.0)
+Config() = Config(44100, 256, 0, 2, 31337)
 
 "Default config"
 CONFIG = Config()

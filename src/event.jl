@@ -2,82 +2,33 @@ using Base.Collections
 
 immutable Event
   f::Function
-  start::Time
-  args::Vector
+  args::Tuple
 end
 
-Event(f, start) = Event(f, start, [])
+Event(f) = Event(f, [])
 
-typealias EventQueue PriorityQueue{Event, Time}
-EventQueue() = PriorityQueue(Event, Time)
-
-type EventList
-  events::EventQueue
-  pending_events::Vector{Event}
-  beat::Time
-  config::Config
-end
-
-function Base.isless(e1::Event, e2::Event)
-  isless(e1.start, e2.start)
-end
-
-function EventList(config=CONFIG)
-  EventList(Event[], config)
-end
-
-function EventList(events, config)
-  pq = EventQueue()
-  for e in events
-    pq[e] = e.start
-  end
-  EventList(pq, Event[], 0.0, config)
-end
-
-Base.append!(eventlist::EventList, events::Vector{Event}) = append!(eventlist.pending_events, events)
-Base.push!(eventlist::EventList, event::Event) = push!(eventlist.pending_events, event)
-Base.empty!(eventlist::EventList) = empty!(eventlist.events)
-Base.isempty(eventlist::EventList) = isempty(eventlist.events)
-Base.delete!(eventlist::EventList, event::Event) = delete!(eventlist.events, event)
-
-@guarded function fire_event(event::Event)
+@guarded function Base.call(event::Event)
   event.f(event.args...)
 end
 
-"Wraps an event with other top-level functions."
-function wrap_event(f, pre_args, event::Event)
-  args = copy(pre_args)
-  push!(args, event)
-  Event(f, event.start, args)
-end
+#events(f, args...) = map((xs) -> Event(f, xs...), args)
 
-"Utility function to create a new Event using the same values as the passed-in event and new start time."
-alter_event_time(start, event::Event) = Event(event.f, start, event.args)
+typealias EventQueue PriorityQueue{Event, Time}
 
-events(f, args...) = map((xs) -> Event(f, xs...), args)
+EventQueue() = PriorityQueue(Event, Time)
 
-"Merges pending-events with the PriorityQueue of known events. Adjusts start times of events to *tempo*."
-function merge_pending!(eventlist::EventList)
-  while !isempty(eventlist.pending_events)
-    # FIXME make atomic
-    new_events = copy(eventlist.pending_events)
-    empty!(eventlist.pending_events)
-    for e in new_events
-      e = alter_event_time(eventlist.beat + e.start, e)
-      eventlist.events[e] = e.start
-    end
+function Base.empty!(q::EventQueue)
+  while length(q) > 0
+    dequeue!(q)
   end
 end
 
-seconds_to_beats(seconds, tempo) = seconds * tempo / 60
-beats_to_seconds(beats, tempo) = beats * 60 / tempo
-
-function Base.call(eventlist::EventList, endframe::Int)
-  merge_pending!(eventlist)
-  beat = seconds_to_beats(endframe/eventlist.config.sample_rate, eventlist.config.tempo)
-  while length(eventlist.events) > 0 && peek(eventlist.events)[2] < beat
-    fire_event(dequeue!(eventlist.events))
+function Base.call(q::EventQueue, endtime::Time)
+  while length(q) > 0 && peek(q)[2] < endtime
+    dequeue!(q)()
   end
-  eventlist.beat = beat
-  !isempty(eventlist)
+  !isempty(q)
 end
+
+Base.schedule(q::EventQueue, start::Time, f::Function, args...) =
+  q[Event(f, args)] = start

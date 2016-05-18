@@ -1,43 +1,36 @@
 using Violet
 
+run(`sudo renice -19 $(getpid())`)
+
+### Lab
+
+
+### Playground
+
 engine = Engine()
 run(engine)
 
-function addgen(engine, gen)
-  push!(engine.root.audio, gen)
+f(freq) = 0.75sine(freq) + 0.25saw(freq)
+
+inst = Instrument(f, 0.1, 0.15, 0.66, 0.2, 4)
+engine.dsp = inst.dsp
+
+function play1(n, x)
+  playnote(engine, inst, 0.0, n+60.0, x/4.0)
+  playnote(engine, inst, 0.5, n+64.0, x/4.0)
+  playnote(engine, inst, 1.0, n+67.0, x/4.0)
+  if x > 0.1
+    schedule(engine, x, play1,
+      round(44100.0x%12.0, 0), rand() > 0.3 ? x - 0.01rand() : x + 0.01rand())
+  else
+    schedule(engine, x, play1, round(44100.0x%12.0, 0), x + 0.5)
+  end
+  nothing
 end
 
-function delgen(engine, gen)
-  delete!(engine.root.audio, gen)
-end
+play1(0.0, 1.0)
 
-function snote(freq::Float64, dur::Float64, start::Float64, engine::Engine)
-  f = sine(freq)
-  e1 = Event(addgen, start, [engine, f])
-  e2 = Event(delgen, start+dur, [engine, f])
-  push!(engine.eventlist, e1)
-  push!(engine.eventlist, e2)
-end
 
-snote(440.0, 1.0, 1.0, engine)
-
-simple_synth(ν) =
-  0.1(0.125sine(0.5ν) + 0.25sine(sqrt(0.5)*ν) + sine(ν)
- + 0.25sine(sqrt(2)*ν) + 0.125sine(2ν) + 0.125sine(4ν))
-   #* 0.25env([0.0, 0.0, 0.02, 1, 0.02, 0.9, 0.2, 0.9, 0.2, 0])
-
-#f = sine(440)
-f = 0.5sine(440.0) + 0.3sine(440.0/sqrt(2)) + 0.2sine(880.0)
-f = 0.2*saw(220.0)
-
-push!(engine.root.audio, f)
-
-#evt = Event(() -> push!(engine.root.audio, f), 5.0, [])
-#push!(engine.eventlist, evt)
-
-#engine.eventlist.current_beat
-
-sleep(10)
-delete!(engine.root.audio, f)
+sleep(3600)
 kill(engine)
 sleep(2) # give time for async print to finish it's job

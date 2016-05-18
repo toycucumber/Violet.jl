@@ -1,7 +1,7 @@
 module PortAudio
 
 export PaStream, PaBuffer, PaSample, PaDeviceIndex, PaStreamWrapper
-export start_stream, stop_stream, writeavailable
+export writeavailable
 
 include(Pkg.dir("Violet", "deps", "deps.jl"))
 include("circularbuffer.jl")
@@ -43,7 +43,7 @@ const paNonInterleaved = convert(PaSampleFormat, 0x80000000)
 type PaStreamWrapper
   stream::PaStream
   deviceID::PaDeviceIndex
-  sample_rate::Real
+  samplerate::Real
   sample_format::PaSampleFormat
   sample_type::Type
   buf_size::Integer
@@ -90,7 +90,7 @@ terminate() = Pa_Terminate()
 
 "Open a PortAudio stream"
 function Base.open(ID::PaDeviceIndex,
-                   num_IO::Tuple{Integer, Integer}, sample_rate::Real,
+                   num_IO::Tuple{Integer, Integer}, samplerate::Real,
                    buf_size::Integer=1024, sample_format::PaSampleFormat=paFloat32)
 
   stream::PaStream
@@ -121,13 +121,13 @@ function Base.open(ID::PaDeviceIndex,
                                           0)
 
 
-    stream = Pa_OpenStream(inputParameters, outputParameters, sample_rate, buf_size)
+    stream = Pa_OpenStream(inputParameters, outputParameters, samplerate, buf_size)
   else
-    stream = Pa_OpenDefaultStream(num_IO[1], num_IO[2], sample_format, sample_rate, buf_size)
+    stream = Pa_OpenDefaultStream(num_IO[1], num_IO[2], sample_format, samplerate, buf_size)
   end
-  play_buffer = CircularBuffer(sample_type, 10sample_rate)
-  tmp_buffer = zeros(sample_type, sample_rate)
-  stream_wrapper = PaStreamWrapper(stream, ID, sample_rate, sample_format,
+  play_buffer = CircularBuffer(sample_type, samplerate)
+  tmp_buffer = zeros(sample_type, 3*buf_size*num_IO[2])
+  stream_wrapper = PaStreamWrapper(stream, ID, samplerate, sample_format,
                                    sample_type, buf_size, num_IO[1], num_IO[2],
                                    play_buffer, tmp_buffer)
 end
@@ -135,9 +135,11 @@ end
 "Close a PortAudio stream"
 Base.close(stream_wrapper::PaStreamWrapper) = Pa_CloseStream(stream_wrapper.stream)
 
-start_stream(stream_wrapper::PaStreamWrapper) = Pa_StartStream(stream_wrapper.stream)
+"Start a PortAudio stream"
+Base.run(stream_wrapper::PaStreamWrapper) = Pa_StartStream(stream_wrapper.stream)
 
-stop_stream(stream_wrapper::PaStreamWrapper) = Pa_StopStream(stream_wrapper.stream)
+"Stop a PortAudio stream"
+Base.kill(stream_wrapper::PaStreamWrapper) = Pa_StopStream(stream_wrapper.stream)
 
 "Find a PortAudio device by its device name and host API name"
 function find_device(device_name::AbstractString, device_api::AbstractString="")
@@ -195,34 +197,29 @@ end
 writeavailable(stream_wrapper::PaStreamWrapper) =
   Pa_GetStreamWriteAvailable(stream_wrapper.stream)
 
-"Write a buffer to a PortAudio stream"
 function Base.write(stream_wrapper::PaStreamWrapper, buffer::PaBuffer, Nframes::Integer=size(buffer,1))
   (stream_wrapper.num_outputs > size(buffer,2) || Nframes > size(buffer,1)) &&
     error("Buffer dimensions do not fit stream parameters")
-
-  stream = stream_wrapper.stream
-  #play = stream_wrapper.play_buffer
-  tmp = stream_wrapper.tmp_buffer
-  channels = stream_wrapper.num_outputs
-
-  interleave(buffer, tmp, channels, Nframes)
-  Pa_WriteStream(stream, tmp, Nframes)
-
-  #=towrite = Pa_GetStreamWriteAvailable(stream)
-  while play.pushed > play.pulled
-    towrite = Pa_GetStreamWriteAvailable(stream)
-    if towrite > 0
-      n = min(towrite*channels, play.pushed - play.pulled)
-      unsafe_copy!(tmp, play, n)
-      Pa_WriteStream(stream, tmp, towrite)
-    else
-      sleep(0)
-    end
-  end=#
-
-  nothing
+  interleave(buffer, stream_wrapper.play_buffer, stream_wrapper.num_outputs, Nframes)
+  return
 end
 
+function Base.flush(stream_wrapper::PaStreamWrapper)
+  stream = stream_wrapper.stream
+  play = stream_wrapper.play_buffer
+  tmp = stream_wrapper.tmp_buffer
+  channels = stream_wrapper.num_outputs
+  towrite = Pa_GetStreamWriteAvailable(stream)
+  towrite <= 0 && return
+  n = channels*towrite
+  if play.read + n <= play.write
+    unsafe_copy!(tmp, play, n)
+  else
+    fill!(tmp, 0.0)
+  end
+  Pa_WriteStream(stream, tmp, towrite)
+  return
+end
 ############ Low-level wrappers for Portaudio function calls ############
 
 Pa_GetDeviceInfo(i) = unsafe_load(ccall((:Pa_GetDeviceInfo, libportaudio),
